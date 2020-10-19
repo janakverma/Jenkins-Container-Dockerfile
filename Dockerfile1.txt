@@ -1,0 +1,94 @@
+# Use openjdk image as base image for java.
+From openjdk:8-jdk
+
+# Run apt update and install Jenkins apt repository.
+RUN apt-get update -y \
+    && wget -q -O - https://pkg.jenkins.io/debian/jenkins.io.key | apt-key add - \
+    && echo deb https://pkg.jenkins.io/debian-stable binary/ > /etc/apt/sources.list.d/jenkins.list \
+    && apt-get update -y 
+
+## Specy jenkins user and group as Argument with uid, gid and http port to run jenkins.
+ARG user=jenkins
+ARG group=jenkins
+ARG uid=1000
+ARG gid=1000
+ARG http_port=8080
+
+## Set environment variable for JENKINS_HOME.
+ENV JENKINS_HOME /var/jenkins_home
+
+## Add jenkins user and group.
+RUN groupadd -g ${gid} ${group} \
+    && useradd -d "$JENKINS_HOME" -u ${uid} -g ${gid} -m -s /bin/bash ${user}
+
+## Install Jenkins 
+RUN apt-get install jenkins -y
+
+## Set java binary as global
+RUN ln -s /usr/local/openjdk-8/bin/java /usr/bin/java 
+
+## Provide sudo access to jenkins
+RUN apt-get install sudo -y \
+    && echo "jenkins ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/jenkins
+
+## Install jenkins-job-builder
+RUN apt-get install python-pip -y \
+    && pip install jenkins-job-builder
+
+## Create directory for jenkins-job-builder
+RUN mkdir /etc/jenkins_jobs 
+
+## Create jenkins-job-builder config directory
+RUN echo "\
+[jenkins] \n\
+user=admin \n\
+password=jenkins_password \n\
+url=http://127.0.0.1:8080 \n\
+query_plugins_info=False \
+" > /etc/jenkins_jobs/jenkins_jobs.ini
+
+## Create jenkins-job-builder config file
+#RUN cat /etc/jenkins_jobs/jenkins_jobs.ini
+
+## Update jenkins password in jenkins_jobs.ini file.
+RUN service jenkins start && sleep 10 && sed -i s@jenkins_password@"$(cat /var/lib/jenkins/secrets/initialAdminPassword)"@g /etc/jenkins_jobs/jenkins_jobs.ini
+
+## Get password on console for login
+RUN cat  /var/lib/jenkins/secrets/initialAdminPassword
+
+## Create jobs directory
+RUN mkdir ~/jobs 
+
+## Create first job file
+RUN echo "\
+- job: \n\
+        name: ls_job \n\
+        description: 'job defination 1' \n\
+        project-type: freestyle \n\
+        builders: \n\
+                - shell: 'ls -la' \
+" > ~/jobs/job1.yaml
+
+## Create second job file.
+RUN echo "\
+- job: \n\
+        name: job2 \n\
+        description: "Job defination 2" \n\
+        parameters: \n\
+            - choice: \n\
+                name: terraform command \n\
+                choices: \n\
+                        - terraform plan \n\
+                        - terraform apply \n\
+                        - terraform destroy \
+" > ~/jobs/job2.yaml
+
+
+## Expose jenkins http port
+EXPOSE 8080
+
+## Update the job builder jenkins jobs
+RUN cd ~/ && service jenkins start && sleep 15 && jenkins-jobs update jobs
+
+## Start jenkins service.
+CMD export JAVA_HOME=/usr/local/openjdk-8  && service jenkins start && tail -f /var/log/jenkins/jenkins.log
